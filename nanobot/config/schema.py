@@ -65,6 +65,13 @@ class DreamConfig(Base):
         return f"every {hours}h"
 
 
+class LlmFallbackEntry(Base):
+    """One hop in the optional multi-provider fallback chain (after the primary)."""
+
+    provider: str
+    model: str
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 
@@ -91,6 +98,9 @@ class AgentDefaults(Base):
         serialization_alias="idleCompactAfterMinutes",
     )  # Auto-compact idle threshold in minutes (0 = disabled)
     dream: DreamConfig = Field(default_factory=DreamConfig)
+    # After the primary (provider + model), try each entry in order when the
+    # previous backend returns a transient error (after its own retries).
+    llm_fallback_chain: list[LlmFallbackEntry] = Field(default_factory=list)
 
 
 class AgentsConfig(Base):

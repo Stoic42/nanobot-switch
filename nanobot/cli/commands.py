@@ -408,73 +408,13 @@ def _make_provider(config: Config):
 
     Routing is driven by ``ProviderSpec.backend`` in the registry.
     """
-    from nanobot.providers.base import GenerationSettings
-    from nanobot.providers.registry import find_by_name
+    from nanobot.providers.factory import LlmBuildError, build_llm_provider
 
-    model = config.agents.defaults.model
-    provider_name = config.get_provider_name(model)
-    p = config.get_provider(model)
-    spec = find_by_name(provider_name) if provider_name else None
-    backend = spec.backend if spec else "openai_compat"
-
-    # --- validation ---
-    if backend == "azure_openai":
-        if not p or not p.api_key or not p.api_base:
-            console.print("[red]Error: Azure OpenAI requires api_key and api_base.[/red]")
-            console.print("Set them in ~/.nanobot/config.json under providers.azure_openai section")
-            console.print("Use the model field to specify the deployment name.")
-            raise typer.Exit(1)
-    elif backend == "openai_compat" and not model.startswith("bedrock/"):
-        needs_key = not (p and p.api_key)
-        exempt = spec and (spec.is_oauth or spec.is_local or spec.is_direct)
-        if needs_key and not exempt:
-            console.print("[red]Error: No API key configured.[/red]")
-            console.print("Set one in ~/.nanobot/config.json under providers section")
-            raise typer.Exit(1)
-
-    # --- instantiation by backend ---
-    if backend == "openai_codex":
-        from nanobot.providers.openai_codex_provider import OpenAICodexProvider
-
-        provider = OpenAICodexProvider(default_model=model)
-    elif backend == "azure_openai":
-        from nanobot.providers.azure_openai_provider import AzureOpenAIProvider
-
-        provider = AzureOpenAIProvider(
-            api_key=p.api_key,
-            api_base=p.api_base,
-            default_model=model,
-        )
-    elif backend == "github_copilot":
-        from nanobot.providers.github_copilot_provider import GitHubCopilotProvider
-        provider = GitHubCopilotProvider(default_model=model)
-    elif backend == "anthropic":
-        from nanobot.providers.anthropic_provider import AnthropicProvider
-
-        provider = AnthropicProvider(
-            api_key=p.api_key if p else None,
-            api_base=config.get_api_base(model),
-            default_model=model,
-            extra_headers=p.extra_headers if p else None,
-        )
-    else:
-        from nanobot.providers.openai_compat_provider import OpenAICompatProvider
-
-        provider = OpenAICompatProvider(
-            api_key=p.api_key if p else None,
-            api_base=config.get_api_base(model),
-            default_model=model,
-            extra_headers=p.extra_headers if p else None,
-            spec=spec,
-        )
-
-    defaults = config.agents.defaults
-    provider.generation = GenerationSettings(
-        temperature=defaults.temperature,
-        max_tokens=defaults.max_tokens,
-        reasoning_effort=defaults.reasoning_effort,
-    )
-    return provider
+    try:
+        return build_llm_provider(config)
+    except LlmBuildError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1) from exc
 
 
 def _load_runtime_config(config: str | None = None, workspace: str | None = None) -> Config:
@@ -1378,6 +1318,83 @@ def plugins_list():
 
 
 # ============================================================================
+# LLM preset switch (China MiniMax / GPT / Kimi)
+# ============================================================================
+
+
+@app.command("switch")
+def switch_llm(
+    preset: str | None = typer.Argument(
+        None,
+        help="minimax-cn | gpt | kimi | kimi-cn",
+    ),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        "-m",
+        help="Override the preset's default model id",
+    ),
+    list_presets: bool = typer.Option(
+        False,
+        "--list",
+        "-l",
+        help="List available presets and exit",
+    ),
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to config.json (default: ~/.nanobot/config.json)",
+    ),
+):
+    """Switch agents.defaults to MiniMax (China), OpenAI GPT, or Moonshot Kimi in one step."""
+    from nanobot.cli.preset_switch import apply_llm_preset, describe_presets
+    from nanobot.config.loader import get_config_path, load_config, save_config, set_config_path
+
+    resolved = Path(config_path).expanduser().resolve() if config_path else None
+    if resolved is not None:
+        set_config_path(resolved)
+
+    path = get_config_path()
+    if list_presets:
+        console.print(f"{__logo__} nanobot switch — presets\n")
+        console.print("[cyan]Presets:[/cyan]")
+        console.print(describe_presets())
+        console.print(f"\n[dim]Config file:[/dim] {path}")
+        console.print("\n[cyan]Usage:[/cyan] nanobot switch <preset> [--model MODEL]")
+        raise typer.Exit(0)
+
+    if preset is None:
+        console.print(f"{__logo__} nanobot switch — presets\n")
+        console.print("[cyan]Presets:[/cyan]")
+        console.print(describe_presets())
+        console.print(f"\n[dim]Config file:[/dim] {path}")
+        console.print("\n[cyan]Usage:[/cyan] nanobot switch <preset> [--model MODEL]")
+        raise typer.Exit(1)
+
+    config = load_config(path)
+    try:
+        provider, applied_model = apply_llm_preset(config, preset, model)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1) from e
+
+    save_config(config, path)
+    console.print(f"[green]✓[/green] Switched to [cyan]{preset}[/cyan]")
+    console.print(f"  primary:  [bold]{provider}[/bold] / [bold]{applied_model}[/bold]")
+    chain = config.agents.defaults.llm_fallback_chain
+    if chain:
+        console.print("  fallback: [dim]" + " → ".join(f"{e.provider}/{e.model}" for e in chain) + "[/dim]")
+    else:
+        console.print("  fallback: [dim](none)[/dim]")
+    console.print(f"  config:   [dim]{path}[/dim]")
+    console.print(
+        "  [dim]Runtime last-used LLM updates after a successful model call; see "
+        "`nanobot status`.[/dim]"
+    )
+
+
+# ============================================================================
 # Status Commands
 # ============================================================================
 
@@ -1397,9 +1414,29 @@ def status():
     console.print(f"Workspace: {workspace} {'[green]✓[/green]' if workspace.exists() else '[red]✗[/red]'}")
 
     if config_path.exists():
+        from nanobot.providers.active_llm import read_active_llm_state
         from nanobot.providers.registry import PROVIDERS
 
-        console.print(f"Model: {config.agents.defaults.model}")
+        d = config.agents.defaults
+        console.print(
+            f"Primary LLM: [bold]{d.provider}[/bold] / [bold]{d.model}[/bold]"
+        )
+        if d.llm_fallback_chain:
+            fb = " → ".join(f"{e.provider}/{e.model}" for e in d.llm_fallback_chain)
+            console.print(f"Fallback chain: [cyan]{fb}[/cyan]")
+        else:
+            console.print("Fallback chain: [dim](none)[/dim]")
+        active = read_active_llm_state()
+        if active and active.get("route"):
+            ts = active.get("ts", "")
+            console.print(
+                f"Last successful LLM: [green]{active.get('route')}[/green]"
+                + (f"  [dim]({ts})[/dim]" if ts else "")
+            )
+        else:
+            console.print(
+                "Last successful LLM: [dim](none recorded yet — run a chat after upgrading)[/dim]"
+            )
 
         # Check API keys from registry
         for spec in PROVIDERS:
