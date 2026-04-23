@@ -92,3 +92,12 @@ logs/
 tmp/
 temp/
 *.tmp
+
+# nanobot local runtime artifacts
+AGENTS.md
+HEARTBEAT.md
+SOUL.md
+TOOLS.md
+USER.md
+memory/
+sessions/

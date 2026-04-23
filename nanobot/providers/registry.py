@@ -253,12 +253,12 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         env_extras=(("ZHIPUAI_API_KEY", "{api_key}"),),
         default_api_base="https://open.bigmodel.cn/api/paas/v4",
     ),
-    # DashScope (通义): Qwen models, OpenAI-compatible endpoint
+    # DashScope / Aliyun Bailian (通义千问): OpenAI-compatible endpoint
     ProviderSpec(
         name="dashscope",
-        keywords=("qwen", "dashscope"),
+        keywords=("qwen", "dashscope", "bailian", "aliyun", "tongyi"),
         env_key="DASHSCOPE_API_KEY",
-        display_name="DashScope",
+        display_name="Aliyun Bailian (DashScope)",
         backend="openai_compat",
         default_api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
     ),
